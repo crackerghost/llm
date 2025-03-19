@@ -32,27 +32,47 @@ for i in range(0, len(text) - seq_len):
 sequences = np.array(sequences)
 targets = np.array(targets)
 
-# Model definition with 2-layer LSTM and dropout
-class CharRNN(nn.Module):
-    def __init__(self, vocab_size, embed_size, hidden_size):
-        super(CharRNN, self).__init__()
+# Transformer-based model definition
+class CharTransformer(nn.Module):
+    def __init__(self, vocab_size, embed_size, num_heads, num_layers, hidden_size, dropout=0.1):
+        super(CharTransformer, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.lstm = nn.LSTM(embed_size, hidden_size, num_layers=2, dropout=0.2, batch_first=True)
-        self.fc = nn.Linear(hidden_size, vocab_size)
+        
+        # Positional Encoding
+        self.positional_encoding = nn.Parameter(torch.zeros(1, seq_len, embed_size))  # learnable positional encoding
+        
+        # Transformer Encoder Layer with batch_first=True
+        encoder_layers = nn.TransformerEncoderLayer(d_model=embed_size, nhead=num_heads, dim_feedforward=hidden_size, dropout=dropout, batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layers, num_layers=num_layers)
+        
+        # Fully connected output layer
+        self.fc = nn.Linear(embed_size, vocab_size)
 
-    def forward(self, x, h=None):
-        x = self.embedding(x)
-        out, (h, c) = self.lstm(x, h)
-        out = self.fc(out[:, -1, :])
-        return out, (h, c)
+    def forward(self, x):
+        # Get the embeddings for the input sequence
+        x = self.embedding(x) + self.positional_encoding  # Add positional encoding to embeddings
+        
+        # Pass through the transformer
+        x = self.transformer(x)
+        
+        # We are interested in the output of the last time step
+        x = x[:, -1, :]  # Get the last token's output
+        
+        # Pass through the fully connected layer to predict next character
+        x = self.fc(x)
+        
+        return x
+
 
 # Model parameters
 vocab_size = len(char)
-embed_size = 64
-hidden_size = 128
+embed_size = 64  # You can experiment with different sizes
+num_heads = 8  # Number of attention heads
+num_layers = 4  # Number of transformer layers
+hidden_size = 128  # Hidden size of transformer
 
 # Initialize model and move to device
-model = CharRNN(vocab_size, embed_size, hidden_size).to(device)
+model = CharTransformer(vocab_size, embed_size, num_heads, num_layers, hidden_size).to(device)
 X = torch.tensor(sequences, dtype=torch.int64).to(device)
 y = torch.tensor(targets, dtype=torch.int64).to(device)
 
@@ -74,7 +94,7 @@ for epoch in range(epochs):
     for inputs, targets in dataloader:
         inputs, targets = inputs.to(device), targets.to(device)
         optimizer.zero_grad()
-        output, _ = model(inputs)
+        output = model(inputs)
         loss = loss_fn(output, targets)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Gradient clipping
@@ -93,7 +113,7 @@ def generate_text(seed_text, length=100, temperature=1.0):
     generated_text = seed_text
     with torch.no_grad():
         for _ in range(length):
-            output, _ = model(input_seq)
+            output = model(input_seq)
             output = output / temperature
             probabilities = torch.softmax(output, dim=1)
             predicted_index = torch.multinomial(probabilities, num_samples=1).item()
@@ -107,4 +127,3 @@ def generate_text(seed_text, length=100, temperature=1.0):
 seed_text = "with a laugh that"
 generated_text = generate_text(seed_text, 50, temperature=0.8)
 print(generated_text)
-
